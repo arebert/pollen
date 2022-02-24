@@ -9,8 +9,13 @@ import threading
 import queue
 from pathlib import Path
 from datetime import datetime
+from ctypes import *
+
+# this lib is copied from https://github.com/ArduCAM/RaspberryPi/blob/master/Motorized_Focus_Camera
+arducam_vcm =CDLL('./lib/libarducam_vcm.so')
 
 ITEM_QUEUE_SZ = 200
+ARDCAM_FOCUS_VAL = 350
 
 class GUI:
     def __init__(self, master, queue):
@@ -34,6 +39,13 @@ class GUI:
         self.pollenIdLbl = tk.Label(btnFrm, text=f"{self.pollenId}")
         self.pollenIdLbl.grid(column=2, row=0, padx=30)
 
+        self.focusVar = tk.IntVar()
+        self.focusVar.set(ARDCAM_FOCUS_VAL)
+        camFocusSpinBox = tk.Spinbox(btnFrm, from_=0, to=1023,
+            command = self.changeCamFocus, textvariable=self.focusVar,
+            increment=10)
+        camFocusSpinBox.grid(column=3, row=0, padx=30)
+
         self.imgPath = Path(datetime.now().strftime('%Y%m%d_%H%M%S'))
         self.imgPath.mkdir(parents=True, exist_ok=True)
 
@@ -46,6 +58,12 @@ class GUI:
             cv2.imwrite(p, self.lastImg)
             self.pollenSubId += 1
             self.nextBtn["state"] = tk.NORMAL
+
+    def changeCamFocus(self):
+        print(f"Change focus {self.focusVar.get()}")
+        print(f"camera.shutter_speed={camera.shutter_speed}")
+        print(f"camera.iso={camera.iso}")
+        arducam_vcm.vcm_write(self.focusVar.get())
 
     def nextPollen(self):
         self.pollenId += 1
@@ -94,19 +112,29 @@ class CameraThread(threading.Thread):
         time.sleep(3)
         rawCapture = PiRGBArray(camera)
 
-        for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
+        for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=False):
             img = frame.array
             self.queue.put_nowait(img)
             rawCapture.truncate(0)
 
 def getPiCam():
+    # https://picamera.readthedocs.io/en/release-1.12/fov.html
+
     camera = PiCamera()
-    #camera.resolution = (1920, 1088)
-    camera.resolution = (1648, 1232)
+    # for Cam V1/Arducam B0176 (OV5647) full sensor area resolutions
+    # - 2592x1944, 1296x972, 640x480
+    #
+    # for Cam V2 (IMX219)
+    # - 3280x2464, 1640x1232
+    camera.resolution = (2592, 1944)
+    camera.shutter_speed = 50000
+
     time.sleep(2)
 
     return camera
 
+
+arducam_vcm.vcm_init()
 
 itemQueue = queue.Queue(ITEM_QUEUE_SZ)
 root = tk.Tk()
@@ -114,6 +142,7 @@ root.geometry('1024x768')
 mainUi = GUI(root, itemQueue)
 
 camera = getPiCam()
+arducam_vcm.vcm_write(ARDCAM_FOCUS_VAL)
 cameraThread = CameraThread(itemQueue, camera)
 cameraThread.start()
 
